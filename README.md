@@ -51,13 +51,23 @@ python -c "from ashare_mcp.data_source import get_annual_statements; \
 
 > 帮我看一下平安银行 2024 年报,总资产、总负债、净利润、经营性现金流分别多少?
 
-## 工具列表(v0)
+## 工具列表
 
 | 工具 | 输入 | 输出 |
 |---|---|---|
 | `get_three_statements` | `stock_code`, `year` | 年报三大表(精选 ~150 字段)|
+| `cross_check_balance` | `stock_code`, `year` | 3 条勾稽校验结果 + 误差 + 行业通用 |
 
 代码归一化支持 `000001` / `SZ000001` / `sz.000001` / `000001.SZ` 多种格式。
+
+`cross_check_balance` 当前 v1 包含 3 条**行业通用**勾稽:
+1. **资产负债平衡** — `TOTAL_ASSETS = TOTAL_LIABILITIES + TOTAL_EQUITY`
+2. **现金流恒等式** — `NETCASH_OPERATE + NETCASH_INVEST + NETCASH_FINANCE + RATE_CHANGE_EFFECT = CCE_ADD`
+3. **期末/期初现金对账** — `END_CCE − BEGIN_CCE = CCE_ADD`
+
+容忍度 1 万元(财报舍入)。字段缺失时该条状态为 `skipped`,不影响其它校验。实测 4 行业(银行 / 白酒 / 电池 / 银行)4 家公司 2024 年报全过 3/3。
+
+走 lru cache 联动:**先调 `get_three_statements` 后调 `cross_check_balance`,后者 < 1ms 秒回**(同一只股票数据已在内存)。
 
 ## 架构
 
@@ -83,9 +93,10 @@ flowchart LR
 
 | 版本 | 工具 | 状态 |
 |---|---|---|
-| v0(当前) | `get_three_statements` | ✅ |
-| v1 | `cross_check_balance`(资产负债勾稽校验) | 设计中 |
+| v0 | `get_three_statements` | ✅ |
+| v1(当前) | `cross_check_balance`(3 条行业通用勾稽) | ✅ |
 | v1 | `compare_peers`(同业 N 家同期横向对比) | 设计中 |
+| v1.5 | `cross_check_balance` 加营业利润分解(行业感知) | 待定 |
 | v2 | 季度数据 + 同比/环比派生指标 | 待定 |
 | v2 | MCP 官方 registry 发布 | 待定 |
 
