@@ -61,16 +61,21 @@ python -c "from ashare_mcp.data_source import get_annual_statements; \
 
 代码归一化支持 `000001` / `SZ000001` / `sz.000001` / `000001.SZ` 多种格式。
 
-`cross_check_balance` 当前 v1 包含 3 条**行业通用**勾稽:
+`cross_check_balance` 当前包含 4 条勾稽(前 3 条行业通用,第 4 条行业感知):
+
 1. **资产负债平衡** — `TOTAL_ASSETS = TOTAL_LIABILITIES + TOTAL_EQUITY`
 2. **现金流恒等式** — `NETCASH_OPERATE + NETCASH_INVEST + NETCASH_FINANCE + RATE_CHANGE_EFFECT = CCE_ADD`
 3. **期末/期初现金对账** — `END_CCE − BEGIN_CCE = CCE_ADD`
+4. **营业利润分解(行业感知)**
+   - **银行**:`OPERATE_PROFIT = OPERATE_INCOME − OPERATE_EXPENSE`
+   - **工商企业**:`OPERATE_PROFIT = TOTAL_OPERATE_INCOME − TOTAL_OPERATE_COST + OTHER_INCOME + INVEST_INCOME + FAIRVALUE_CHANGE_INCOME + ASSET_IMPAIRMENT_INCOME + CREDIT_IMPAIRMENT_INCOME + ASSET_DISPOSAL_INCOME [+ EXCHANGE_INCOME]`
+   - **行业自动识别**:有 `ACCEPT_DEPOSIT > 10 亿` 走银行公式,有 `TOTAL_OPERATE_INCOME` + `TOTAL_OPERATE_COST` 走工商公式,否则 `skipped`(保险等暂不支持)
 
-容忍度 1 万元(财报舍入)。字段缺失时该条状态为 `skipped`,不影响其它校验。实测 4 行业(银行 / 白酒 / 电池 / 银行)4 家公司 2024 年报全过 3/3。
+容忍度:前 3 条 1 万元(单项舍入),第 4 条 1000 万元(多项加总舍入累积)。字段缺失或行业无法识别时该条 `skipped`,不影响其它校验。实测 3 行业(银行 / 白酒 / 电池)4 家公司 2024 年报全过 4/4。
 
 走 lru cache 联动:**先调 `get_three_statements` 后调 `cross_check_balance`,后者 < 1ms 秒回**(同一只股票数据已在内存)。
 
-`compare_peers` 默认 metrics:`TOTAL_ASSETS / TOTAL_OPERATE_INCOME / PARENT_NETPROFIT / NETCASH_OPERATE / TOTAL_EQUITY`,自动派生 `ROE = PARENT_NETPROFIT / TOTAL_EQUITY`。**自动 fallback**:银行业 `TOTAL_OPERATE_INCOME` 缺失时退到 `OPERATE_INCOME` 并在 `fallbacks` 字段标注。**并发实现**:ThreadPoolExecutor(max_workers=8),N 家公司并行拉(单家失败不挂整体,记入 `errors`)。实测 4 大银行 2024 年报对比 42.9s 跑完(2 缓存 + 2 冷启动并发)。
+`compare_peers` 默认 metrics:`TOTAL_ASSETS / TOTAL_OPERATE_INCOME / PARENT_NETPROFIT / NETCASH_OPERATE / TOTAL_EQUITY`,自动派生 **`ROE = PARENT_NETPROFIT / 平均权益`**(本年期末权益 + 去年期末权益的均值,去年数据走 lru cache 几乎无成本;去年数据缺失时降级为期末权益,在 `roe_method` 字段标 `ending_equity_fallback`)。**自动 fallback**:银行业 `TOTAL_OPERATE_INCOME` 缺失时退到 `OPERATE_INCOME` 并在 `fallbacks` 字段标注。**并发实现**:ThreadPoolExecutor(max_workers=8),N 家公司并行拉(单家失败不挂整体,记入 `errors`)。实测 4 大银行 2024 年报对比 ~38s 跑完;招行 ROE 12.85%(零售之王长期领跑)。
 
 ## 架构
 
@@ -98,9 +103,10 @@ flowchart LR
 |---|---|---|
 | v0 | `get_three_statements` | ✅ |
 | v1 | `cross_check_balance`(3 条行业通用勾稽) | ✅ |
-| v1(当前) | `compare_peers`(同业横向对比 + ROE 派生) | ✅ |
-| v1.5 | `cross_check_balance` 加营业利润分解(行业感知) | 待定 |
-| v1.5 | `compare_peers` 平均权益 ROE / 跨年对比 | 待定 |
+| v1 | `compare_peers`(同业横向对比 + ROE 派生) | ✅ |
+| v1.5(当前) | `cross_check_balance` + 营业利润分解(行业感知:银行 / 工商企业) | ✅ |
+| v1.5(当前) | `compare_peers` 升级到 ROE_avg(平均权益) | ✅ |
+| v2 | 跨年趋势工具 `track_company_history`(单公司多年 + CAGR) | 待定 |
 | v2 | 季度数据 + 同比/环比派生指标 | 待定 |
 | v2 | MCP 官方 registry 发布 | 待定 |
 

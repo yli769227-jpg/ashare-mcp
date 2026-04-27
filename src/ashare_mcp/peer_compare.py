@@ -51,8 +51,19 @@ def _safe_div(a: Optional[float], b: Optional[float]) -> Optional[float]:
     return a / b
 
 
+def _get_prev_equity(symbol: str, year: int) -> Optional[float]:
+    """拉去年同期权益(为算 ROE_avg 用)。失败返回 None,不挂主流程。"""
+    try:
+        prev = get_annual_statements(symbol, year - 1)
+        prev_bs = prev.get("balance_sheet") or {}
+        return prev_bs.get("TOTAL_PARENT_EQUITY") or prev_bs.get("TOTAL_EQUITY")
+    except Exception as e:
+        logger.info(f"prev-year equity unavailable for {symbol} year={year-1}: {e}")
+        return None
+
+
 def _compute_one(symbol: str, year: int, metrics: List[str]) -> Dict[str, Any]:
-    """拉一家公司 → 提取 metrics + 派生 ROE。失败抛异常(由调用方 capture)。"""
+    """拉一家公司 → 提取 metrics + 派生 ROE_avg(失败降级到 ROE_ending)。"""
     stmts = get_annual_statements(symbol, year)
     values: Dict[str, Any] = {}
     fallbacks: Dict[str, str] = {}
@@ -61,12 +72,25 @@ def _compute_one(symbol: str, year: int, metrics: List[str]) -> Dict[str, Any]:
         values[m] = v
         if used and used != m:
             fallbacks[m] = used
-    # 派生指标:ROE(期末权益简化版)
-    values["ROE"] = _safe_div(values.get("PARENT_NETPROFIT"), values.get("TOTAL_EQUITY"))
+
+    pnp = values.get("PARENT_NETPROFIT")
+    eq_end = values.get("TOTAL_EQUITY")
+
+    # ROE: 默认平均权益(本年 + 去年期末权益的均值),失败降级到期末权益
+    prev_eq = _get_prev_equity(symbol, year)
+    roe_method: str
+    if pnp is not None and eq_end is not None and prev_eq is not None and (eq_end + prev_eq) > 0:
+        values["ROE"] = pnp / ((eq_end + prev_eq) / 2)
+        roe_method = "avg_equity"
+    else:
+        values["ROE"] = _safe_div(pnp, eq_end)
+        roe_method = "ending_equity_fallback" if prev_eq is None else "avg_equity_failed"
+
     return {
         "stock_code": symbol,
         "company_name": stmts.get("company_name"),
         "values": values,
+        "roe_method": roe_method,
         "fallbacks": fallbacks if fallbacks else None,
     }
 
