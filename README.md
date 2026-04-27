@@ -57,6 +57,7 @@ python -c "from ashare_mcp.data_source import get_annual_statements; \
 |---|---|---|
 | `get_three_statements` | `stock_code`, `year` | 年报三大表(精选 ~150 字段)|
 | `cross_check_balance` | `stock_code`, `year` | 3 条勾稽校验结果 + 误差 + 行业通用 |
+| `compare_peers` | `stock_codes[]`, `year`, `metrics?` | 同业 N 家横向对比 + 排名 / max-min-avg-std + ROE |
 
 代码归一化支持 `000001` / `SZ000001` / `sz.000001` / `000001.SZ` 多种格式。
 
@@ -68,6 +69,8 @@ python -c "from ashare_mcp.data_source import get_annual_statements; \
 容忍度 1 万元(财报舍入)。字段缺失时该条状态为 `skipped`,不影响其它校验。实测 4 行业(银行 / 白酒 / 电池 / 银行)4 家公司 2024 年报全过 3/3。
 
 走 lru cache 联动:**先调 `get_three_statements` 后调 `cross_check_balance`,后者 < 1ms 秒回**(同一只股票数据已在内存)。
+
+`compare_peers` 默认 metrics:`TOTAL_ASSETS / TOTAL_OPERATE_INCOME / PARENT_NETPROFIT / NETCASH_OPERATE / TOTAL_EQUITY`,自动派生 `ROE = PARENT_NETPROFIT / TOTAL_EQUITY`。**自动 fallback**:银行业 `TOTAL_OPERATE_INCOME` 缺失时退到 `OPERATE_INCOME` 并在 `fallbacks` 字段标注。**并发实现**:ThreadPoolExecutor(max_workers=8),N 家公司并行拉(单家失败不挂整体,记入 `errors`)。实测 4 大银行 2024 年报对比 42.9s 跑完(2 缓存 + 2 冷启动并发)。
 
 ## 架构
 
@@ -94,9 +97,10 @@ flowchart LR
 | 版本 | 工具 | 状态 |
 |---|---|---|
 | v0 | `get_three_statements` | ✅ |
-| v1(当前) | `cross_check_balance`(3 条行业通用勾稽) | ✅ |
-| v1 | `compare_peers`(同业 N 家同期横向对比) | 设计中 |
+| v1 | `cross_check_balance`(3 条行业通用勾稽) | ✅ |
+| v1(当前) | `compare_peers`(同业横向对比 + ROE 派生) | ✅ |
 | v1.5 | `cross_check_balance` 加营业利润分解(行业感知) | 待定 |
+| v1.5 | `compare_peers` 平均权益 ROE / 跨年对比 | 待定 |
 | v2 | 季度数据 + 同比/环比派生指标 | 待定 |
 | v2 | MCP 官方 registry 发布 | 待定 |
 

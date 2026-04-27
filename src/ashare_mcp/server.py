@@ -3,10 +3,13 @@ ashare-mcp: 把 A 股财报变成 LLM 可调的 MCP 工具。
 """
 from __future__ import annotations
 
+from typing import List, Optional
+
 from mcp.server.fastmcp import FastMCP
 
 from .checks import run_all_checks
 from .data_source import get_annual_statements
+from .peer_compare import compare_peers_impl
 from .utils import get_logger, normalize_stock_code
 
 logger = get_logger(__name__)
@@ -115,6 +118,62 @@ def cross_check_balance(stock_code: str, year: int) -> dict:
         return out
     except Exception as e:
         logger.exception(f"cross_check_balance failed: {type(e).__name__}: {e}")
+        raise
+
+
+@mcp.tool()
+def compare_peers(
+    stock_codes: List[str],
+    year: int,
+    metrics: Optional[List[str]] = None,
+) -> dict:
+    """
+    同业 N 家公司同年年报横向对比,自动算排名 / 最大最小 / 均值 / 标准差,加派生指标 ROE。
+
+    参数:
+      stock_codes: 公司代码列表,如 ['000001', '600036', '601398']。建议 2-10 家。
+                   支持各种格式:'000001' / 'SZ000001' / 'sz.000001' / '000001.SZ'。
+      year: 年份。
+      metrics: 可选,自定义对比字段。默认包括:
+               TOTAL_ASSETS / TOTAL_OPERATE_INCOME / PARENT_NETPROFIT / NETCASH_OPERATE / TOTAL_EQUITY。
+               派生指标 ROE = PARENT_NETPROFIT / TOTAL_EQUITY 总是会算上。
+               银行业 TOTAL_OPERATE_INCOME 缺失时自动 fallback 到 OPERATE_INCOME(在 fallbacks 字段里标注)。
+
+    返回:
+      {
+        "year": 2024,
+        "report_date": "2024-12-31",
+        "metrics": ["TOTAL_ASSETS", ..., "ROE"],
+        "companies": [
+          {
+            "stock_code": "SZ000001",
+            "company_name": "平安银行",
+            "values": {metric: number},
+            "ranks":  {metric: rank},      # 1 = 最大
+            "fallbacks": {original_key: actual_key} | null
+          }
+        ],
+        "summary": {
+          metric: {"max", "min", "avg", "std", "count"}
+        },
+        "errors": [
+          {"stock_code": "...", "error": "..."}  # 单家失败不挂整体
+        ]
+      }
+
+    并发实现: ThreadPoolExecutor(max_workers=8),N 家公司并行拉。
+    缓存联动: 已经查过的公司走 lru cache,< 1ms 复用。
+    """
+    logger.info(f"tool=compare_peers stock_codes={stock_codes} year={year} metrics={metrics}")
+    try:
+        result = compare_peers_impl(stock_codes, year, metrics)
+        logger.info(
+            f"compare_peers done: companies={len(result['companies'])} "
+            f"errors={len(result['errors'])}"
+        )
+        return result
+    except Exception as e:
+        logger.exception(f"compare_peers failed: {type(e).__name__}: {e}")
         raise
 
 
