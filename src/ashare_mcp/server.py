@@ -9,6 +9,7 @@ from mcp.server.fastmcp import FastMCP
 
 from .checks import run_all_checks
 from .data_source import get_annual_statements
+from .history import track_company_history_impl
 from .peer_compare import compare_peers_impl
 from .utils import get_logger, normalize_stock_code
 
@@ -174,6 +175,79 @@ def compare_peers(
         return result
     except Exception as e:
         logger.exception(f"compare_peers failed: {type(e).__name__}: {e}")
+        raise
+
+
+@mcp.tool()
+def track_company_history(
+    stock_code: str,
+    years: int = 5,
+    metrics: Optional[List[str]] = None,
+) -> dict:
+    """
+    拉某只 A 股最近 N 年的多 metric 时间序列,并自动算 YoY / CAGR / mean/std/trend / 异常突变。
+
+    后续杜邦分析 / 利润质量 / 红旗扫描等 v2 工具皆基于此底座。
+
+    参数:
+      stock_code: A 股代码,任意常见格式(同 get_three_statements)。
+      years: 想要的年份数(默认 5,上限 20,akshare 一般给 10-15 年)。
+      metrics: 自定义 metric 列表;不传走默认。默认覆盖营收 / 利润 / 资产 / 现金流 / 红旗预备字段:
+               TOTAL_OPERATE_INCOME / PARENT_NETPROFIT / NETPROFIT / OPERATE_PROFIT /
+               TOTAL_ASSETS / TOTAL_EQUITY / TOTAL_LIABILITIES /
+               NETCASH_OPERATE / NETCASH_INVEST / NETCASH_FINANCE /
+               ACCOUNTS_RECE / INVENTORY / GOODWILL。
+               银行业 TOTAL_OPERATE_INCOME 缺失时自动 fallback 到 OPERATE_INCOME(在 fallbacks 字段标注)。
+
+    返回:
+      {
+        "stock_code": "SZ000001",
+        "company_name": "平安银行",
+        "industry": "bank",                          # bank / industrial / unknown
+        "years": [2020, 2021, 2022, 2023, 2024],     # 实际可用,递增(最早→最近)
+        "report_dates": ["2020-12-31", ...],
+        "missing_years": [],                          # 用户请求 6 年但只有 5 年时填这里
+        "series": {
+          "TOTAL_OPERATE_INCOME": [..., ..., ..., ..., ...],   # 长度 = len(years),缺失为 None
+          ...
+        },
+        "fallbacks": {"TOTAL_OPERATE_INCOME": "OPERATE_INCOME"},   # 走过 fallback 的 metric
+        "yoy": {
+          "TOTAL_OPERATE_INCOME": [None, 0.12, 0.08, -0.05, 0.15],
+          # 第一年恒为 None;上一年 ≤ 0 时为 "from_negative" 字符串
+        },
+        "cagr": {
+          "TOTAL_OPERATE_INCOME": 0.0832,            # None = 无法计算
+        },
+        "stats": {
+          "TOTAL_OPERATE_INCOME": {"mean": ..., "std": ..., "trend": "up"},
+          # trend ∈ {"up","down","volatile","insufficient_data"}
+        },
+        "anomalies": [
+          {"year": 2022, "metric": "PARENT_NETPROFIT", "yoy": -0.42, "note": "突变下滑"},
+        ],
+      }
+
+    YoY 异常阈值: |YoY| > 30%。CAGR 仅在首末非空且首值 > 0 时计算。
+
+    缓存联动: data_source._cached 把整公司全部历史年份一次性拉满并 lru_cache。
+    第二次问同一公司不同年份范围(例如先要 5 年再要 10 年),网络层零调用,< 1ms 返回。
+    """
+    logger.info(
+        f"tool=track_company_history stock_code={stock_code!r} years={years} "
+        f"metrics={metrics}"
+    )
+    try:
+        result = track_company_history_impl(stock_code, years, metrics)
+        logger.info(
+            f"track_company_history done: company={result['company_name']!r} "
+            f"industry={result['industry']} years={len(result['years'])} "
+            f"anomalies={len(result['anomalies'])} "
+            f"fallbacks={list(result['fallbacks'].keys())}"
+        )
+        return result
+    except Exception as e:
+        logger.exception(f"track_company_history failed: {type(e).__name__}: {e}")
         raise
 
 
