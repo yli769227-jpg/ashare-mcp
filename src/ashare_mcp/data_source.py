@@ -36,7 +36,21 @@ def _fetch_em(symbol: str, kind: str) -> pd.DataFrame:
     }[kind]
     t0 = time.monotonic()
     logger.info(f"akshare fetch start: kind={kind} symbol={symbol}")
-    df = fn(symbol=symbol)
+    try:
+        df = fn(symbol=symbol)
+    except (ValueError, KeyboardInterrupt, SystemExit):
+        raise
+    except Exception as e:
+        # akshare 对不存在的 symbol 或上游 HTML 解析失败会抛 TypeError/AttributeError/HTTPError 等
+        # 统一包成 ValueError,LLM 客户端错误处理简单且与"无数据"语义一致
+        logger.warning(
+            f"akshare upstream error symbol={symbol} kind={kind}: "
+            f"{type(e).__name__}: {e}"
+        )
+        raise ValueError(
+            f"akshare upstream error for symbol={symbol} kind={kind} "
+            f"(invalid code or upstream issue): {type(e).__name__}: {e}"
+        ) from e
     if df is None or len(df) == 0:
         raise ValueError(f"no data from akshare for symbol={symbol} kind={kind} (invalid code?)")
     elapsed = time.monotonic() - t0
