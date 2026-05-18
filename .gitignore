@@ -12,3 +12,12 @@ build/
 .ruff_cache/
 .mypy_cache/
 *.log
+
+# Frontend (web/)
+web/node_modules/
+web/dist/
+web/.env
+web/.env.local
+web/.env.*.local
+web/*.tsbuildinfo
+web/.vite/

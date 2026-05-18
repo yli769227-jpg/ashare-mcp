@@ -11,10 +11,21 @@ dependencies = [
     "mcp>=1.27.0",
     "akshare>=1.18.0",
     "pandas>=2.0",
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.30",
+    "mineru>=3.1.14",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8",
+    "pytest-asyncio>=0.23",
+    "httpx>=0.27",
 ]
 
 [project.scripts]
 ashare-mcp = "ashare_mcp.server:main"
+ashare-mcp-http = "ashare_mcp.http_app:main"
 
 [build-system]
 requires = ["hatchling"]
