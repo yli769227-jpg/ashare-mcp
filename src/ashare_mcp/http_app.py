@@ -161,9 +161,12 @@ def api_history(
 
 
 def main() -> None:
+    import os
     import uvicorn
-    logger.info(f"ashare-mcp HTTP starting on 0.0.0.0:8000 (version={VERSION})")
-    uvicorn.run("ashare_mcp.http_app:app", host="0.0.0.0", port=8000, reload=False)
+    # PaaS (Railway / Render / Fly) 会注入 $PORT;本地不设时默认 8000
+    port = int(os.environ.get("PORT", "8000"))
+    logger.info(f"ashare-mcp HTTP starting on 0.0.0.0:{port} (version={VERSION})")
+    uvicorn.run("ashare_mcp.http_app:app", host="0.0.0.0", port=port, reload=False)
 
 
 if __name__ == "__main__":

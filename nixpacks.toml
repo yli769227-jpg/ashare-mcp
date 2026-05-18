@@ -1,0 +1,21 @@
+# Nixpacks 构建配置 — Railway 部署后端用
+# Python 锁到 3.11(Railway 默认可能更高,这里显式锁版本避免 akshare/pandas 兼容意外)
+# 不安装 [pdf] extra(MinerU 几个 G,Railway free tier 装不下也跑不动)
+
+providers = ["python"]
+
+[phases.setup]
+nixPkgs = ["python311", "gcc"]
+
+[phases.install]
+cmds = [
+  "python -m venv /opt/venv",
+  ". /opt/venv/bin/activate && pip install --upgrade pip",
+  ". /opt/venv/bin/activate && pip install -e ."
+]
+
+[start]
+cmd = ". /opt/venv/bin/activate && ashare-mcp-http"
+
+[variables]
+PYTHONUNBUFFERED = "1"
