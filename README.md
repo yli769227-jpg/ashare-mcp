@@ -1,5 +1,9 @@
 # ashare-mcp
 
+[![CI](https://github.com/yli769227-jpg/ashare-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/yli769227-jpg/ashare-mcp/actions/workflows/ci.yml)
+[![Python](https://img.shields.io/badge/python-3.10%20%7C%203.11%20%7C%203.12-blue.svg)](https://www.python.org/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
+
 > 把 A 股财报变成 LLM 可调的工具。An MCP server that turns Chinese A-share financial statements into tools your LLM can call.
 
 让 Claude(或任何 MCP 客户端)用一句"平安银行 2024 年报怎么样?"直接拿到结构化的资产负债表 / 利润表 / 现金流量表,字段经过精选、单位明确、缓存友好。
@@ -56,8 +60,10 @@ python -c "from ashare_mcp.data_source import get_annual_statements; \
 | 工具 | 输入 | 输出 |
 |---|---|---|
 | `get_three_statements` | `stock_code`, `year` | 年报三大表(精选 ~150 字段)|
-| `cross_check_balance` | `stock_code`, `year` | 3 条勾稽校验结果 + 误差 + 行业通用 |
+| `cross_check_balance` | `stock_code`, `year` | 4 条勾稽校验(3 条通用 + 1 条行业感知)+ 误差 |
 | `compare_peers` | `stock_codes[]`, `year`, `metrics?` | 同业 N 家横向对比 + 排名 / max-min-avg-std + ROE |
+| `track_company_history` | `stock_code`, `years`, `metrics?` | 跨年时间序列 + YoY / CAGR / trend / anomalies |
+| `parse_document` *(需 `[pdf]` extra)* | `file_path`, `output_format?`, `lang?` | PDF / DOCX / PPTX / 图片 → LLM-ready markdown(MinerU)|
 
 代码归一化支持 `000001` / `SZ000001` / `sz.000001` / `000001.SZ` 多种格式。
 
@@ -77,18 +83,77 @@ python -c "from ashare_mcp.data_source import get_annual_statements; \
 
 `compare_peers` 默认 metrics:`TOTAL_ASSETS / TOTAL_OPERATE_INCOME / PARENT_NETPROFIT / NETCASH_OPERATE / TOTAL_EQUITY`,自动派生 **`ROE = PARENT_NETPROFIT / 平均权益`**(本年期末权益 + 去年期末权益的均值,去年数据走 lru cache 几乎无成本;去年数据缺失时降级为期末权益,在 `roe_method` 字段标 `ending_equity_fallback`)。**自动 fallback**:银行业 `TOTAL_OPERATE_INCOME` 缺失时退到 `OPERATE_INCOME` 并在 `fallbacks` 字段标注。**并发实现**:ThreadPoolExecutor(max_workers=8),N 家公司并行拉(单家失败不挂整体,记入 `errors`)。实测 4 大银行 2024 年报对比 ~38s 跑完;招行 ROE 12.85%(零售之王长期领跑)。
 
+## HTTP API 模式
+
+除了 MCP stdio 协议,项目还提供一个 FastAPI HTTP wrapper,**供 Web 前端、curl、Postman 等任意 HTTP 客户端调用**——这是给 Web demo 用的:
+
+```bash
+pip install -e .
+ashare-mcp-http
+# Uvicorn running on http://0.0.0.0:8000
+```
+
+5 个 endpoint(完整 schema 见 `/docs` FastAPI 自动生成的 OpenAPI 页面):
+
+| 方法 | 路径 | 对应 MCP tool |
+|---|---|---|
+| `GET` | `/healthz` | (健康检查 + 版本号)|
+| `GET` | `/api/statements?stock_code&year` | `get_three_statements` |
+| `GET` | `/api/cross-check?stock_code&year` | `cross_check_balance` |
+| `POST` | `/api/compare-peers`(body JSON) | `compare_peers` |
+| `GET` | `/api/history?stock_code&years` | `track_company_history` |
+
+错误统一格式:`{"error": "...", "code": "INVALID_INPUT" | "UPSTREAM_ERROR"}`(HTTP 422 / 502)。CORS 默认 `*`,生产部署前应收紧到具体域名。
+
+冒烟测试:
+
+```bash
+curl 'http://localhost:8000/api/statements?stock_code=000001&year=2024' | jq '.company_name, .balance_sheet.TOTAL_ASSETS'
+# "平安银行"
+# 5769270000000
+```
+
+## Web 前端 demo
+
+`web/` 子目录是一个 React + Vite + TypeScript + Tailwind 写的 4-tab 前端,直接调上面的 HTTP API,**给非技术用户也能用浏览器试一下**:
+
+```bash
+cd web
+npm install
+cp .env.example .env  # 默认 VITE_API_BASE=http://localhost:8000
+npm run dev           # 开发预览 → http://localhost:5173
+npm run build         # 生产构建到 dist/
+```
+
+4 个 tab 对应 4 个核心工具:**三大报表 / 勾稽校验 / 同业对比 / 历史趋势**。需要后端 `ashare-mcp-http` 同时跑在 :8000。详见 [`web/README.md`](./web/README.md)。
+
+## PDF 文档解析(可选)
+
+`parse_document` 工具用 [opendatalab/MinerU](https://github.com/opendatalab/MinerU) 把 PDF / DOCX / PPTX / 图片(招股书、研报、年报扫描件等)解析成 LLM-ready 的 markdown。由于 MinerU pipeline 后端需要 torch + transformers 等几 GB 依赖,**单独走 extra 安装**:
+
+```bash
+pip install -e ".[pdf]"        # 装 mineru
+# 若要解析 PDF / 图片,还需 pipeline extras:
+pip install "mineru[pipeline]"
+```
+
+不装也不影响其它 4 个工具——只是调用 `parse_document` 时会以 `RuntimeError("mineru not installed")` 友好失败。
+
 ## 架构
 
 ```mermaid
 flowchart LR
     LLM[Claude / 任意 MCP 客户端] -->|JSON-RPC over stdio| Server[ashare-mcp<br/>FastMCP server]
-    Server -->|代码归一化| Norm[股票代码归一化<br/>SZ/SH/BJ 自动判断]
-    Server -->|拉取三表| DS[数据源封装<br/>akshare 包装层]
+    Web[Web 前端<br/>React + Vite] -->|HTTP / JSON| HTTP[ashare-mcp-http<br/>FastAPI wrapper]
+    Curl[curl / Postman / 其它] -->|HTTP / JSON| HTTP
+    Server -->|共享业务层| Core[业务模块<br/>checks / peer_compare / history]
+    HTTP -->|共享业务层| Core
+    Core -->|代码归一化| Norm[股票代码归一化<br/>SZ/SH/BJ 自动判断]
+    Core -->|拉取三表| DS[数据源封装<br/>akshare 包装层]
     DS -->|缓存命中| Cache[(进程内存缓存<br/>lru_cache)]
     DS -->|缓存未命中| YearlyEM[akshare<br/>by_yearly_em]
     YearlyEM -->|HTTP| EM[东方财富<br/>财报数据接口]
     DS -->|字段过滤| Filter[剔除元数据列<br/>剔除同比列<br/>剔除空/零字段]
-    Server -->|结构化 JSON| LLM
 ```
 
 **关键设计**:
@@ -104,22 +169,42 @@ flowchart LR
 | v0 | `get_three_statements` | ✅ |
 | v1 | `cross_check_balance`(3 条行业通用勾稽) | ✅ |
 | v1 | `compare_peers`(同业横向对比 + ROE 派生) | ✅ |
-| v1.5(当前) | `cross_check_balance` + 营业利润分解(行业感知:银行 / 工商企业) | ✅ |
-| v1.5(当前) | `compare_peers` 升级到 ROE_avg(平均权益) | ✅ |
-| v2 | 跨年趋势工具 `track_company_history`(单公司多年 + CAGR) | 待定 |
-| v2 | 季度数据 + 同比/环比派生指标 | 待定 |
-| v2 | MCP 官方 registry 发布 | 待定 |
+| v1.5 | `cross_check_balance` + 营业利润分解(行业感知:银行 / 工商企业) | ✅ |
+| v1.5 | `compare_peers` 升级到 ROE_avg(平均权益) | ✅ |
+| v2 | 跨年趋势工具 `track_company_history`(单公司多年 + CAGR) | ✅ |
+| v2 | `parse_document` PDF/DOCX → markdown(MinerU,optional) | ✅ |
+| v2(当前) | FastAPI HTTP wrapper + Web 前端 demo + pytest + CI | ✅ |
+| v3 | 季度数据 + 同比/环比派生指标 | 待定 |
+| v3 | 公开 demo 站(Vercel 前端 + Railway 后端) | 待定 |
+| v3 | MCP 官方 registry 发布 | 待定 |
 
 ## 本地开发
 
 ```bash
-# 增量验证(每次改完跑一遍)
-python -c "from ashare_mcp.utils import normalize_stock_code; \
-  assert normalize_stock_code('000001') == 'SZ000001'"
+# 装 dev 依赖(包含 pytest / pytest-asyncio / httpx)
+pip install -e ".[dev]"
 
+# 跑测试套件(全部离线,akshare 走 mock,~1.5s)
+pytest tests/ -v
+
+# 增量验证(每次改完跑一遍)
 python -c "from ashare_mcp.server import mcp; \
   import asyncio; print([t.name for t in asyncio.run(mcp.list_tools())])"
+
+# 起 HTTP server 本地预览
+ashare-mcp-http
+# 另一终端:
+curl http://localhost:8000/healthz
 ```
+
+### CI
+
+`.github/workflows/ci.yml` 跑两个 job:
+
+- **Backend** matrix:Python 3.10 / 3.11 / 3.12 — `pip install -e ".[dev]"` + `pytest tests/ -v` + 验证 MCP & HTTP 入口都能 import
+- **Frontend**(Node 20)— `cd web && npm ci` + `tsc --noEmit` + `npm run build`
+
+PDF 路径(`parse_document`)默认 skip(mineru 是 optional);要本地跑这部分:`pip install -e ".[dev,pdf]" && pytest tests/test_parse_document.py -v`。
 
 ## 数据声明
 

@@ -13,10 +13,15 @@ dependencies = [
     "pandas>=2.0",
     "fastapi>=0.115",
     "uvicorn[standard]>=0.30",
-    "mineru>=3.1.14",
 ]
 
 [project.optional-dependencies]
+# PDF / docx / pptx → markdown 解析(parse_document tool 用)。
+# 单独装一次能拉几个 G(torch/transformers/onnxruntime),按需开启:
+#   pip install -e ".[pdf]"
+pdf = [
+    "mineru>=3.1.14",
+]
 dev = [
     "pytest>=8",
     "pytest-asyncio>=0.23",

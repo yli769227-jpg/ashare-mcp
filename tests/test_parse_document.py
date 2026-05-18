@@ -19,7 +19,10 @@ from pathlib import Path
 
 import pytest
 
-from ashare_mcp.parse_document import parse_document_impl
+# mineru 是 optional extra(pip install ".[pdf]"),没装时跳过整个文件而不是挂。
+pytest.importorskip("mineru", reason="mineru not installed; install with: pip install -e '.[pdf]'")
+
+from ashare_mcp.parse_document import parse_document_impl  # noqa: E402
 
 KEYWORD = "ASHARE-MCP-PARSE-TEST"
 
