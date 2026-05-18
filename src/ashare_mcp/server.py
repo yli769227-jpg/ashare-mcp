@@ -3,13 +3,14 @@ ashare-mcp: 把 A 股财报变成 LLM 可调的 MCP 工具。
 """
 from __future__ import annotations
 
-from typing import List, Optional
+from typing import List, Literal, Optional
 
 from mcp.server.fastmcp import FastMCP
 
 from .checks import run_all_checks
 from .data_source import get_annual_statements
 from .history import track_company_history_impl
+from .parse_document import parse_document_impl
 from .peer_compare import compare_peers_impl
 from .utils import get_logger, normalize_stock_code
 
@@ -248,6 +249,61 @@ def track_company_history(
         return result
     except Exception as e:
         logger.exception(f"track_company_history failed: {type(e).__name__}: {e}")
+        raise
+
+
+@mcp.tool()
+def parse_document(
+    file_path: str,
+    output_format: Literal["markdown", "json", "both"] = "markdown",
+    lang: str = "ch",
+) -> dict:
+    """
+    把本地 PDF / DOCX / PPTX / 图片(招股书、研报、年报扫描件等)用 opendatalab/MinerU
+    解析成 LLM-ready 的 markdown,可选附带 content_list JSON(带 bbox / page_idx 的结构化版本)。
+
+    参数:
+      file_path: 本地绝对路径或 ~ 路径,支持 .pdf / .docx / .pptx / .xlsx / .png / .jpg 等。
+      output_format: 'markdown'(只要 md)/ 'json'(只要结构化 list)/ 'both'。默认 'markdown'。
+      lang: OCR 主语言,默认 'ch'(中文)。其它如 'en','japan' 等参 MinerU 文档。
+
+    返回:
+      {
+        "content": "<markdown 字符串>",   # output_format='json' 时为空串
+        "metadata": {
+          "engine": "mineru",
+          "backend": "pipeline",         # 由 env MINERU_PARSE_BACKEND 覆盖
+          "source_file": "<abs path>",
+          "file_suffix": ".pdf",
+          "lang": "ch",
+          "pages": <int|None>,
+          "markdown_chars": <int>,
+          "has_json": <bool>
+        },
+        "content_list": [...]            # 仅 output_format in {'json','both'} 时出现
+      }
+
+    后端:
+      默认 backend='pipeline',纯 CPU 可跑,office 类型走专用 docx/pptx/xlsx 解析(无需模型)。
+      PDF 首次跑会下载 pipeline 模型权重到 huggingface cache(~几百 MB)。
+      可通过环境变量 MINERU_PARSE_BACKEND 切到 'vlm-...' / 'hybrid-...' 后端。
+
+    日志: 关键路径全部 `[parse_document]` 前缀,走 stderr。
+    """
+    logger.info(
+        f"tool=parse_document file_path={file_path!r} "
+        f"output_format={output_format!r} lang={lang!r}"
+    )
+    try:
+        result = parse_document_impl(file_path, output_format=output_format, lang=lang)
+        meta = result["metadata"]
+        logger.info(
+            f"parse_document done: pages={meta['pages']} "
+            f"md_chars={meta['markdown_chars']} has_json={meta['has_json']}"
+        )
+        return result
+    except Exception as e:
+        logger.exception(f"parse_document failed: {type(e).__name__}: {e}")
         raise
 
 
