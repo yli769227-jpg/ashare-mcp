@@ -14,6 +14,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any, Dict, List, Optional
 
 from .data_source import get_annual_statements
+from .security import validate_ticker
 from .utils import get_logger, normalize_stock_code
 
 logger = get_logger(__name__)
@@ -105,12 +106,14 @@ def compare_peers_impl(
 
     metrics = list(metrics) if metrics else list(DEFAULT_METRICS)
 
-    # 归一化代码,无效代码进 errors,不参与拉取
+    # 归一化代码,无效/恶意代码进 errors,不参与拉取
+    # 先过 validate_ticker(形态白名单 / 拦注入字符),再过 normalize_stock_code(交易所归一)
     normalized: List[tuple[str, str]] = []
     errors: List[Dict[str, Any]] = []
     for code in stock_codes:
         try:
-            normalized.append((code, normalize_stock_code(code)))
+            cleaned = validate_ticker(code)
+            normalized.append((code, normalize_stock_code(cleaned)))
         except ValueError as e:
             errors.append({"stock_code": code, "error": f"ValueError: {e}"})
 
