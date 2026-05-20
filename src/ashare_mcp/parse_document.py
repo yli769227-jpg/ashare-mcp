@@ -21,15 +21,26 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import tempfile
 from pathlib import Path
 from typing import Literal
 
+from .security import safe_path
 from .utils import get_logger
 
 logger = get_logger(__name__)
 
 LOG_PREFIX = "[parse_document]"
+
+# 可选: 当设置 ASHARE_MCP_PARSE_BASE=/some/dir 时,所有 file_path 必须落在该目录下。
+# 不设(默认)时维持原行为(MCP stdio 本地信任边界)。
+# 对照 TradingAgents v0.2.5 的 TRADINGAGENTS_* env-var 模式。
+_PARSE_BASE_ENV = "ASHARE_MCP_PARSE_BASE"
+
+# lang 字段防御:OCR 语言代码白名单(对齐 MinerU 支持的常见语言);
+# 不在白名单内的字符直接拒,避免命令注入 / 路径注入风险。
+_LANG_RE = re.compile(r"^[a-z]{2,12}$")
 
 OutputFormat = Literal["markdown", "json", "both"]
 
@@ -43,7 +54,20 @@ _SUPPORTED_SUFFIXES = _PDF_SUFFIXES | _OFFICE_SUFFIXES | _IMAGE_SUFFIXES
 def _validate_path(file_path: str) -> Path:
     if not isinstance(file_path, str) or not file_path.strip():
         raise ValueError(f"invalid file_path: {file_path!r}")
-    p = Path(file_path).expanduser().resolve()
+
+    # 可选 sandbox: 设置 ASHARE_MCP_PARSE_BASE 后,所有路径必须落在该目录下。
+    # 不设默认走原行为(本地信任边界)。
+    parse_base = os.environ.get(_PARSE_BASE_ENV)
+    if parse_base:
+        base = Path(parse_base).expanduser().resolve()
+        if not base.exists():
+            raise ValueError(
+                f"{_PARSE_BASE_ENV} points to non-existent dir: {base}"
+            )
+        p = safe_path(file_path, base)
+    else:
+        p = Path(file_path).expanduser().resolve()
+
     if not p.exists():
         raise FileNotFoundError(f"file not found: {p}")
     if not p.is_file():
@@ -55,6 +79,16 @@ def _validate_path(file_path: str) -> Path:
             f"{sorted(_SUPPORTED_SUFFIXES)}"
         )
     return p
+
+
+def _validate_lang(lang: str) -> str:
+    """OCR 语言代码白名单(只允许 2-12 位小写字母)。"""
+    if not isinstance(lang, str):
+        raise ValueError(f"lang must be str, got {type(lang).__name__}")
+    s = lang.strip().lower()
+    if not _LANG_RE.match(s):
+        raise ValueError(f"invalid lang: {lang!r} (expected /^[a-z]{{2,12}}$/)")
+    return s
 
 
 def _resolve_subdir(parent: Path, file_stem: str) -> Path:
@@ -101,6 +135,7 @@ def parse_document_impl(
       }
     """
     src = _validate_path(file_path)
+    lang = _validate_lang(lang)
     suffix = src.suffix.lower()
     backend = os.environ.get("MINERU_PARSE_BACKEND", "pipeline")
 
