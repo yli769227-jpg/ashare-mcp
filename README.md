@@ -4,7 +4,12 @@
 [![Python](https://img.shields.io/badge/python-3.10%20%7C%203.11%20%7C%203.12-blue.svg)](https://www.python.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
 
-> 把 A 股财报变成 LLM 可调的工具。An MCP server that turns Chinese A-share financial statements into tools your LLM can call.
+> **Turn Chinese A-share (沪深京) financial statements into tools your LLM can call.**
+> 把 A 股财报变成 LLM 可调的工具 —— 一句"平安银行 2024 年报怎么样?"直接拿到结构化三大表。
+
+<p align="center">
+  <img src="assets/demo.gif" width="720" alt="Ask Claude about Ping An Bank's 2024 financials via ashare-mcp, get a structured table back">
+</p>
 
 让 Claude(或任何 MCP 客户端)用一句"平安银行 2024 年报怎么样?"直接拿到结构化的资产负债表 / 利润表 / 现金流量表,字段经过精选、单位明确、缓存友好。
 
