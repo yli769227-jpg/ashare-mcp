@@ -2,7 +2,7 @@
 akshare 数据源封装。
 - 拉东方财富 stock_*_sheet_by_yearly_em(只拉年报,比 by_report_em 快 3-5 倍)。
 - 进程内存缓存(同 stock_kind 不重复拉,冷启动一次 ~10s/sheet)。
-- 字段过滤:剔除元数据列、_YOY 同比列、空/零字段。
+- 字段过滤:剔除元数据列、_YOY 同比列、空(NaN)字段。数值为 0 的字段保留 —— 0 与缺失语义不同(勾稽校验 / 历史序列 / 同业对比都依赖这个区分)。
 """
 from __future__ import annotations
 
@@ -86,8 +86,8 @@ def _filter_row(row: pd.Series) -> Dict[str, Any]:
             continue
         if pd.isna(val):
             continue
-        if isinstance(val, (int, float)) and val == 0:
-            continue
+        # 注意:不要剔除数值为 0 的字段 —— 0 是真实披露值,与缺失(NaN)语义不同。
+        # 剔 0 会导致勾稽校验误判 skipped、history 序列出现假 None、peer_compare 排除 0 值公司。
         out[col] = _to_native(val)
     return out
 

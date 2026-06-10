@@ -16,11 +16,14 @@ def _fake_statements(
     netcash_operate: float = 1.0,
     total_operate_income: float | None = None,
     operate_income: float | None = None,
+    total_parent_equity: float | None = None,
 ) -> Dict[str, Any]:
     bs: Dict[str, Any] = {
         "TOTAL_ASSETS": total_assets,
         "TOTAL_EQUITY": total_equity,
     }
+    if total_parent_equity is not None:
+        bs["TOTAL_PARENT_EQUITY"] = total_parent_equity
     pl: Dict[str, Any] = {
         "PARENT_NETPROFIT": parent_netprofit,
     }
@@ -140,9 +143,71 @@ def test_compare_peers_bank_total_operate_income_fallback_to_operate_income():
     assert c["fallbacks"] == {"TOTAL_OPERATE_INCOME": "OPERATE_INCOME"}
 
 
+def test_compare_peers_roe_uses_parent_equity_when_minority_interest_high():
+    """少数股东权益占比高的公司:分母必须用归母权益(与分子 PARENT_NETPROFIT 同口径)。"""
+    # 总权益 10e11,但归母只有 4e11(少数股东占 60%)
+    _FIXTURE[("SZ000001", 2024)] = _fake_statements(
+        "少数股东大户", 5e12, 4e10, 1.0e12, total_parent_equity=4.0e11,
+    )
+    _FIXTURE[("SZ000001", 2023)] = _fake_statements(
+        "少数股东大户", 4.8e12, 3.8e10, 9.0e11, total_parent_equity=3.6e11,
+    )
+
+    out = peer_compare.compare_peers_impl(["000001"], 2024)
+    c = out["companies"][0]
+    assert c["roe_method"] == "avg_equity"
+    assert c["roe_equity_basis"] == "TOTAL_PARENT_EQUITY"
+    # ROE = 4e10 / ((4.0e11 + 3.6e11)/2),用归母权益而不是总权益
+    assert c["values"]["ROE"] == pytest.approx(4e10 / ((4.0e11 + 3.6e11) / 2))
+
+
+def test_compare_peers_roe_basis_consistent_when_prev_lacks_parent_equity():
+    """上年缺 TOTAL_PARENT_EQUITY 时,两年必须一致地用 TOTAL_EQUITY,不能一年归母一年总权益。"""
+    _FIXTURE[("SZ000001", 2024)] = _fake_statements(
+        "口径混搭", 5e12, 4e10, 1.0e12, total_parent_equity=4.0e11,
+    )
+    # 2023 只有 TOTAL_EQUITY,没有 TOTAL_PARENT_EQUITY
+    _FIXTURE[("SZ000001", 2023)] = _fake_statements("口径混搭", 4.8e12, 3.8e10, 9.0e11)
+
+    out = peer_compare.compare_peers_impl(["000001"], 2024)
+    c = out["companies"][0]
+    assert c["roe_method"] == "avg_equity"
+    assert c["roe_equity_basis"] == "TOTAL_EQUITY"
+    # 两年都用 TOTAL_EQUITY:4e10 / ((1.0e12 + 9.0e11)/2)
+    assert c["values"]["ROE"] == pytest.approx(4e10 / ((1.0e12 + 9.0e11) / 2))
+
+
+def test_compare_peers_roe_ending_fallback_reports_basis():
+    """上年拉不到 → 期末权益降级,roe_equity_basis 标注实际口径(优先归母)。"""
+    _FIXTURE[("SZ000001", 2024)] = _fake_statements(
+        "只有今年", 5e12, 4e10, 1.0e12, total_parent_equity=4.0e11,
+    )
+    out = peer_compare.compare_peers_impl(["000001"], 2024)
+    c = out["companies"][0]
+    assert c["roe_method"] == "ending_equity_fallback"
+    assert c["roe_equity_basis"] == "TOTAL_PARENT_EQUITY"
+    assert c["values"]["ROE"] == pytest.approx(4e10 / 4.0e11)
+
+
 def test_compare_peers_empty_list_raises():
     with pytest.raises(ValueError):
         peer_compare.compare_peers_impl([], 2024)
+
+
+def test_compare_peers_too_many_codes_rejected_before_fetching():
+    """超过 MAX_STOCK_CODES 直接拒绝(清晰报错),不触发任何上游抓取。"""
+    codes = [f"{i:06d}" for i in range(peer_compare.MAX_STOCK_CODES + 1)]
+    with pytest.raises(ValueError, match="too many stock_codes"):
+        peer_compare.compare_peers_impl(codes, 2024)
+
+
+def test_compare_peers_at_limit_allowed():
+    """恰好等于上限不拒绝(单家无 fixture 进 errors,但不抛 too many)。"""
+    codes = ["000001"] * peer_compare.MAX_STOCK_CODES
+    _FIXTURE[("SZ000001", 2024)] = _fake_statements("平安", 1e12, 1e11, 1e11)
+    _FIXTURE[("SZ000001", 2023)] = _fake_statements("平安", 9e11, 9e10, 9e10)
+    out = peer_compare.compare_peers_impl(codes, 2024)
+    assert "companies" in out
 
 
 def test_compare_peers_custom_metrics_only_those_appear_plus_roe():

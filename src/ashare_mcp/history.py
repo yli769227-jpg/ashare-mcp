@@ -84,20 +84,25 @@ def _find_metric_in_year(
     return None, None
 
 
-def _compute_yoy(series: List[Optional[float]]) -> List[YoYItem]:
+def _compute_yoy(series: List[Optional[float]], years: List[int]) -> List[YoYItem]:
     """
     按年序计算 YoY,长度与输入序列相同(第 0 项恒为 None)。
 
     规则:
-      - 当年或上一年缺失 -> None
-      - 上一年值 <= 0   -> "from_negative"(LLM 自行解释)
-      - 否则           -> (cur - prev) / prev
+      - 当年或上一年缺失           -> None
+      - 与上一个数据点年份差 > 1   -> None(中间有缺年,不是真正的"同比")
+      - 上一年值 <= 0             -> "from_negative"(LLM 自行解释)
+      - 否则                      -> (cur - prev) / prev
     """
     out: List[YoYItem] = [None]
     for i in range(1, len(series)):
         prev = series[i - 1]
         cur = series[i]
         if prev is None or cur is None:
+            out.append(None)
+            continue
+        # 相邻元素年份不连续(如 2022 -> 2024):跨年涨幅不能当 YoY
+        if years[i] - years[i - 1] != 1:
             out.append(None)
             continue
         if prev <= 0:
@@ -107,8 +112,8 @@ def _compute_yoy(series: List[Optional[float]]) -> List[YoYItem]:
     return out
 
 
-def _compute_cagr(series: List[Optional[float]]) -> Optional[float]:
-    """首末非空且首值 > 0 时计算 CAGR。否则 None。"""
+def _compute_cagr(series: List[Optional[float]], years: List[int]) -> Optional[float]:
+    """首末非空且首值 > 0 时计算 CAGR。指数用实际年份跨度(末年 - 首年),与是否缺中间年无关。"""
     n = len(series)
     if n < 2:
         return None
@@ -118,8 +123,11 @@ def _compute_cagr(series: List[Optional[float]]) -> Optional[float]:
         return None
     if start <= 0 or end <= 0:
         return None
+    span = years[-1] - years[0]
+    if span <= 0:
+        return None
     try:
-        return (end / start) ** (1.0 / (n - 1)) - 1.0
+        return (end / start) ** (1.0 / span) - 1.0
     except (ValueError, ZeroDivisionError, OverflowError):
         return None
 
@@ -174,7 +182,7 @@ def _extract_year_statements(
     year: int,
 ) -> Tuple[Optional[Dict[str, Any]], Optional[Dict[str, Any]], Optional[Dict[str, Any]], Optional[str]]:
     """
-    提取某年三表(已过滤元数据/空值/零值/_YOY 列)和公司名。
+    提取某年三表(已过滤元数据/NaN/_YOY 列;0 值保留)和公司名。
 
     返回 (balance_sheet, income_statement, cash_flow_statement, company_name)。
     任一行缺失即在该位置返回 None。
@@ -242,13 +250,12 @@ def track_company_history_impl(
     avail_int_desc = [int(y) for y in avail_desc]
     picked_desc = avail_int_desc[:years]
     picked_years = sorted(picked_desc)  # 递增:最早 -> 最近
-    # missing_years:用户请求超过实际可用时,缺失年份 = 最近年-(years-1) 起到最近年里、不在 picked 里的
-    if avail_int_desc and len(picked_years) < years:
-        most_recent = avail_int_desc[0]
-        wanted = list(range(most_recent - years + 1, most_recent + 1))
-        missing_years = sorted(set(wanted) - set(picked_years))
-    else:
-        missing_years = []
+    # missing_years:wanted 区间(最近年往前 years 年,并扩到 picked 实际起点)与 picked 的差集。
+    # 任何时候都计算 —— 既覆盖"请求超过实际可用"(尾部缺),也覆盖"中间年份有缺口"(如缺 2023)。
+    most_recent = avail_int_desc[0]
+    wanted_start = min(most_recent - years + 1, picked_years[0])
+    wanted = range(wanted_start, most_recent + 1)
+    missing_years = sorted(set(wanted) - set(picked_years))
 
     logger.info(f"available years: {avail_desc[:10]}, picked: {picked_years}")
 
@@ -301,9 +308,9 @@ def track_company_history_impl(
 
     for m in metric_keys:
         s = series[m]
-        y_seq = _compute_yoy(s)
+        y_seq = _compute_yoy(s, picked_years)
         yoy[m] = y_seq
-        cagr[m] = _compute_cagr(s)
+        cagr[m] = _compute_cagr(s, picked_years)
         stats[m] = _compute_stats(s, y_seq)
         anomalies.extend(_detect_anomalies(picked_years, m, y_seq))
 

@@ -108,7 +108,7 @@ ashare-mcp-http
 | `POST` | `/api/compare-peers`(body JSON) | `compare_peers` |
 | `GET` | `/api/history?stock_code&years` | `track_company_history` |
 
-错误统一格式:`{"error": "...", "code": "INVALID_INPUT" | "UPSTREAM_ERROR"}`(HTTP 422 / 502)。CORS 默认 `*`,生产部署前应收紧到具体域名。
+错误统一格式:`{"error": "...", "code": "INVALID_INPUT" | "UPSTREAM_ERROR"}`(HTTP 422 / 502)。CORS 默认 `*`,生产部署前应收紧到具体域名。`/api/compare-peers` 单次最多 20 个代码(防请求放大);公开部署建议在反向代理层(Nginx / Cloudflare 等)再加限流。
 
 冒烟测试:
 

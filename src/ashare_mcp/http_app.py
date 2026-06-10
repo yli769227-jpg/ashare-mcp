@@ -16,7 +16,7 @@ from pydantic import BaseModel, Field
 from .data_source import get_annual_statements
 from .checks import run_all_checks
 from .history import track_company_history_impl
-from .peer_compare import compare_peers_impl
+from .peer_compare import MAX_STOCK_CODES, compare_peers_impl
 from .utils import get_logger, normalize_stock_code
 
 logger = get_logger(__name__)
@@ -73,7 +73,9 @@ async def _generic_exception_handler(request: Request, exc: Exception) -> JSONRe
 # ---------------------------------------------------------------------------
 
 class ComparePeersRequest(BaseModel):
-    stock_codes: List[str] = Field(..., min_length=1)
+    # max_length 防请求放大:每家公司 3 次上游抓取,公开部署不设上限会被资源耗尽。
+    # compare_peers_impl 内部还有同样的校验(MCP stdio 路径共用)。
+    stock_codes: List[str] = Field(..., min_length=1, max_length=MAX_STOCK_CODES)
     year: int
     metrics: Optional[List[str]] = None
 

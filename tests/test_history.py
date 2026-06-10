@@ -169,6 +169,72 @@ def test_history_missing_years_when_request_more_than_available(monkeypatch):
     assert out["missing_years"] == [2020, 2021]
 
 
+# 缺 2023 的工商企业 fixture(2020/2021/2022/2024,中间缺口)
+GAP_BS = _make_df(
+    [2020, 2021, 2022, 2024],
+    [
+        {"TOTAL_ASSETS": 1.0e10, "TOTAL_EQUITY": 4.0e9, "TOTAL_LIABILITIES": 6.0e9, "_name": "缺口公司"},
+        {"TOTAL_ASSETS": 1.1e10, "TOTAL_EQUITY": 4.4e9, "TOTAL_LIABILITIES": 6.6e9, "_name": "缺口公司"},
+        {"TOTAL_ASSETS": 1.2e10, "TOTAL_EQUITY": 4.5e9, "TOTAL_LIABILITIES": 7.5e9, "_name": "缺口公司"},
+        {"TOTAL_ASSETS": 1.5e10, "TOTAL_EQUITY": 5.8e9, "TOTAL_LIABILITIES": 9.2e9, "_name": "缺口公司"},
+    ],
+)
+
+GAP_PL = _make_df(
+    [2020, 2021, 2022, 2024],
+    [
+        {"TOTAL_OPERATE_INCOME": 5.0e9, "TOTAL_OPERATE_COST": 4.0e9, "PARENT_NETPROFIT": 5.0e8, "_name": "缺口公司"},
+        {"TOTAL_OPERATE_INCOME": 5.5e9, "TOTAL_OPERATE_COST": 4.4e9, "PARENT_NETPROFIT": 5.5e8, "_name": "缺口公司"},
+        {"TOTAL_OPERATE_INCOME": 6.0e9, "TOTAL_OPERATE_COST": 5.4e9, "PARENT_NETPROFIT": 6.0e8, "_name": "缺口公司"},
+        {"TOTAL_OPERATE_INCOME": 8.0e9, "TOTAL_OPERATE_COST": 6.0e9, "PARENT_NETPROFIT": 8.0e8, "_name": "缺口公司"},
+    ],
+)
+
+GAP_CF = _make_df(
+    [2020, 2021, 2022, 2024],
+    [
+        {"NETCASH_OPERATE": 8.0e8, "_name": "缺口公司"},
+        {"NETCASH_OPERATE": 9.0e8, "_name": "缺口公司"},
+        {"NETCASH_OPERATE": 7.0e8, "_name": "缺口公司"},
+        {"NETCASH_OPERATE": 1.0e9, "_name": "缺口公司"},
+    ],
+)
+
+
+def _patch_gap(monkeypatch):
+    def fake(symbol, kind):
+        return {"balance": GAP_BS, "profit": GAP_PL, "cash_flow": GAP_CF}[kind]
+    monkeypatch.setattr(history, "_cached", fake)
+
+
+def test_history_gap_year_yoy_is_none_not_fake_growth(monkeypatch):
+    """缺 2023 时,2024 相对 2022 的两年涨幅不能当 YoY,必须为 None。"""
+    _patch_gap(monkeypatch)
+    out = history.track_company_history_impl("000001", years=5)
+    assert out["years"] == [2020, 2021, 2022, 2024]
+    yoy = out["yoy"]["TOTAL_OPERATE_INCOME"]
+    assert yoy[0] is None
+    assert yoy[1] == pytest.approx(0.10)              # 2020 -> 2021 连续
+    assert yoy[2] == pytest.approx((6.0 - 5.5) / 5.5)  # 2021 -> 2022 连续
+    assert yoy[3] is None                              # 2022 -> 2024 跨缺口
+
+
+def test_history_gap_year_reported_in_missing_years(monkeypatch):
+    """即使 picked 数量满足请求,中间缺口也必须出现在 missing_years。"""
+    _patch_gap(monkeypatch)
+    out = history.track_company_history_impl("000001", years=4)
+    assert out["years"] == [2020, 2021, 2022, 2024]
+    assert 2023 in out["missing_years"]
+
+
+def test_history_gap_year_cagr_uses_year_span(monkeypatch):
+    """CAGR 指数 = 1/(末年 - 首年) = 1/4,而不是 1/(数据点数-1) = 1/3。"""
+    _patch_gap(monkeypatch)
+    out = history.track_company_history_impl("000001", years=5)
+    expected = (8.0e9 / 5.0e9) ** (1.0 / (2024 - 2020)) - 1.0
+    assert out["cagr"]["TOTAL_OPERATE_INCOME"] == pytest.approx(expected)
+
+
 def test_history_years_zero_raises(monkeypatch):
     _patch_industrial(monkeypatch)
     with pytest.raises(ValueError):

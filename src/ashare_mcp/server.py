@@ -88,15 +88,19 @@ def cross_check_balance(stock_code: str, year: int) -> dict:
           },
           ...
         ],
-        "summary": {"total": 3, "passed": 3, "failed": 0, "skipped": 0}
+        "summary": {"total": 4, "passed": 4, "failed": 0, "skipped": 0}
       }
 
-    当前 v1 包含 3 条行业通用勾稽:
+    当前包含 4 条勾稽:
       1. 资产负债平衡: TOTAL_ASSETS = TOTAL_LIABILITIES + TOTAL_EQUITY
       2. 现金流恒等式: 三大现金流 + 汇率影响 = 现金净增加额
       3. 期末/期初现金对账: END_CCE - BEGIN_CCE = CCE_ADD
+      4. 营业利润分解(行业感知): 银行 OPERATE_PROFIT = OPERATE_INCOME - OPERATE_EXPENSE;
+         工商企业 OPERATE_PROFIT = TOTAL_OPERATE_INCOME - TOTAL_OPERATE_COST + 其他收益等加项。
+         行业无法判定时该条 skipped。
 
-    容忍度 1 万元(财报舍入)。字段缺失时该条 status='skipped',不影响其它校验。
+    容忍度: 第 1-3 条 1 万元(财报舍入);第 4 条 1000 万元(东方财富多项加总的舍入累积可达百万级)。
+    字段缺失时该条 status='skipped',不影响其它校验。
     """
     logger.info(f"tool=cross_check_balance stock_code={stock_code!r} year={year}")
     try:
@@ -138,8 +142,11 @@ def compare_peers(
       year: 年份。
       metrics: 可选,自定义对比字段。默认包括:
                TOTAL_ASSETS / TOTAL_OPERATE_INCOME / PARENT_NETPROFIT / NETCASH_OPERATE / TOTAL_EQUITY。
-               派生指标 ROE = PARENT_NETPROFIT / TOTAL_EQUITY 总是会算上。
+               派生指标 ROE 总是会算上:ROE = PARENT_NETPROFIT / 平均权益((本年期末 + 上年期末) / 2)。
+               权益口径两年一致:优先 TOTAL_PARENT_EQUITY(归母权益,与分子同口径),缺失时 fallback TOTAL_EQUITY;
+               上年数据拉不到时降级为期末权益。实际口径见 roe_method / roe_equity_basis 字段。
                银行业 TOTAL_OPERATE_INCOME 缺失时自动 fallback 到 OPERATE_INCOME(在 fallbacks 字段里标注)。
+      注意: stock_codes 单次最多 20 个,超限直接报错(防上游请求放大)。
 
     返回:
       {
@@ -152,6 +159,12 @@ def compare_peers(
             "company_name": "平安银行",
             "values": {metric: number},
             "ranks":  {metric: rank},      # 1 = 最大
+            "roe_method": "avg_equity",    # ROE 计算方法,取值:
+                                           #   "avg_equity"              = 平均权益(正常路径)
+                                           #   "ending_equity_fallback"  = 上年权益拉不到 / 两年无一致口径,退化为期末权益
+                                           #   "avg_equity_failed"       = 两年口径找到了但分子缺失或权益和 <= 0,退化为期末权益
+            "roe_equity_basis": "TOTAL_PARENT_EQUITY",  # ROE 分母实际用的权益字段:
+                                           #   "TOTAL_PARENT_EQUITY"(归母权益,优先)/ "TOTAL_EQUITY" / null(ROE 无法计算)
             "fallbacks": {original_key: actual_key} | null
           }
         ],
@@ -207,7 +220,7 @@ def track_company_history(
         "industry": "bank",                          # bank / industrial / unknown
         "years": [2020, 2021, 2022, 2023, 2024],     # 实际可用,递增(最早→最近)
         "report_dates": ["2020-12-31", ...],
-        "missing_years": [],                          # 用户请求 6 年但只有 5 年时填这里
+        "missing_years": [],                          # 请求范围内拿不到的年份:请求 6 年只有 5 年、或中间年份缺口(如缺 2023)都填这里
         "series": {
           "TOTAL_OPERATE_INCOME": [..., ..., ..., ..., ...],   # 长度 = len(years),缺失为 None
           ...
@@ -215,7 +228,7 @@ def track_company_history(
         "fallbacks": {"TOTAL_OPERATE_INCOME": "OPERATE_INCOME"},   # 走过 fallback 的 metric
         "yoy": {
           "TOTAL_OPERATE_INCOME": [None, 0.12, 0.08, -0.05, 0.15],
-          # 第一年恒为 None;上一年 ≤ 0 时为 "from_negative" 字符串
+          # 第一年恒为 None;与上一个数据点年份不连续(中间缺年)时为 None;上一年 ≤ 0 时为 "from_negative" 字符串
         },
         "cagr": {
           "TOTAL_OPERATE_INCOME": 0.0832,            # None = 无法计算

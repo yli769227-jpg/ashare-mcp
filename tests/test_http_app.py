@@ -176,6 +176,33 @@ def test_compare_peers_422_empty_list(client):
     assert r.status_code == 422
 
 
+def test_compare_peers_422_too_many_codes(client, monkeypatch):
+    # pydantic max_length → FastAPI 自身 422,业务函数完全不被调用(防请求放大)
+    called = {"n": 0}
+    def fake(stock_codes, year, metrics=None):
+        called["n"] += 1
+        return {}
+    monkeypatch.setattr(http_app, "compare_peers_impl", fake)
+
+    codes = [f"{i:06d}" for i in range(http_app.MAX_STOCK_CODES + 1)]
+    r = client.post("/api/compare-peers", json={"stock_codes": codes, "year": 2024})
+    assert r.status_code == 422
+    assert called["n"] == 0
+
+
+def test_compare_peers_at_limit_passes_schema(client, monkeypatch):
+    def fake(stock_codes, year, metrics=None):
+        return {
+            "year": year, "report_date": f"{year}-12-31", "metrics": [],
+            "companies": [], "summary": {}, "errors": [],
+        }
+    monkeypatch.setattr(http_app, "compare_peers_impl", fake)
+
+    codes = [f"{i:06d}" for i in range(http_app.MAX_STOCK_CODES)]
+    r = client.post("/api/compare-peers", json={"stock_codes": codes, "year": 2024})
+    assert r.status_code == 200
+
+
 def test_compare_peers_422_value_error(client, monkeypatch):
     def fake(stock_codes, year, metrics=None):
         raise ValueError("invalid metrics")

@@ -4,7 +4,11 @@
 - 并发拉取 N 家公司年报(ThreadPoolExecutor + lru cache 线程安全)。
 - 默认 metric 集合行业通用(银行 + 工商企业 + 制造业都有意义)。
 - 自动 fallback:TOTAL_OPERATE_INCOME 缺失时退到 OPERATE_INCOME(银行场景)。
-- 派生指标 ROE = PARENT_NETPROFIT / TOTAL_EQUITY(期末权益简化版)。
+- 派生指标 ROE = PARENT_NETPROFIT / 平均权益((本年期末 + 上年期末) / 2)。
+  权益口径两年一致:优先 TOTAL_PARENT_EQUITY(与分子归母净利润同口径),缺失时 fallback TOTAL_EQUITY;
+  上年数据拉不到时降级为期末权益。实际方法 / 口径见每家公司的 roe_method / roe_equity_basis 字段:
+    roe_method ∈ {avg_equity, ending_equity_fallback, avg_equity_failed}
+    roe_equity_basis ∈ {TOTAL_PARENT_EQUITY, TOTAL_EQUITY, None}。
 - 单家失败不挂整个 tool,记入 errors 字段。
 """
 from __future__ import annotations
@@ -25,6 +29,10 @@ DEFAULT_METRICS = [
     "NETCASH_OPERATE",
     "TOTAL_EQUITY",
 ]
+
+# 单次对比的公司数上限。每家公司要打 3 次上游接口(三表),
+# 不设上限时公开 HTTP 部署可被单个请求放大成数千次上游抓取。
+MAX_STOCK_CODES = 20
 
 # 某些字段在某行业缺失时的 fallback(如银行业没有 TOTAL_OPERATE_INCOME)
 FALLBACK_MAP = {
@@ -51,15 +59,30 @@ def _safe_div(a: Optional[float], b: Optional[float]) -> Optional[float]:
     return a / b
 
 
-def _get_prev_equity(symbol: str, year: int) -> Optional[float]:
-    """拉去年同期权益(为算 ROE_avg 用)。失败返回 None,不挂主流程。"""
+# ROE 分母权益口径,按优先级:归母权益(与分子 PARENT_NETPROFIT 匹配)> 总权益
+_EQUITY_BASIS_KEYS = ("TOTAL_PARENT_EQUITY", "TOTAL_EQUITY")
+
+
+def _get_prev_balance_sheet(symbol: str, year: int) -> Optional[Dict[str, Any]]:
+    """拉去年同期资产负债表(为算 ROE_avg 用)。失败返回 None,不挂主流程。"""
     try:
         prev = get_annual_statements(symbol, year - 1)
-        prev_bs = prev.get("balance_sheet") or {}
-        return prev_bs.get("TOTAL_PARENT_EQUITY") or prev_bs.get("TOTAL_EQUITY")
+        return prev.get("balance_sheet") or {}
     except Exception as e:
-        logger.info(f"prev-year equity unavailable for {symbol} year={year-1}: {e}")
+        logger.info(f"prev-year balance sheet unavailable for {symbol} year={year-1}: {e}")
         return None
+
+
+def _pick_equity(bs: Dict[str, Any]) -> tuple[Optional[float], Optional[str]]:
+    """按 _EQUITY_BASIS_KEYS 优先级取期末权益。注意用 is None 判断,0 是合法值。"""
+    for key in _EQUITY_BASIS_KEYS:
+        v = bs.get(key)
+        if v is not None:
+            try:
+                return float(v), key
+            except (TypeError, ValueError):
+                continue
+    return None, None
 
 
 def _compute_one(symbol: str, year: int, metrics: List[str]) -> Dict[str, Any]:
@@ -74,23 +97,49 @@ def _compute_one(symbol: str, year: int, metrics: List[str]) -> Dict[str, Any]:
             fallbacks[m] = used
 
     pnp = values.get("PARENT_NETPROFIT")
-    eq_end = values.get("TOTAL_EQUITY")
+    cur_bs = stmts.get("balance_sheet") or {}
 
-    # ROE: 默认平均权益(本年 + 去年期末权益的均值),失败降级到期末权益
-    prev_eq = _get_prev_equity(symbol, year)
+    # ROE: 默认平均权益(本年 + 去年期末权益的均值),失败降级到期末权益。
+    # 权益口径两年必须一致:优先 TOTAL_PARENT_EQUITY(与分子 PARENT_NETPROFIT 同口径),
+    # 任一年缺失则两年一致地 fallback 到 TOTAL_EQUITY。实际口径写入 roe_equity_basis。
+    prev_bs = _get_prev_balance_sheet(symbol, year)
     roe_method: str
-    if pnp is not None and eq_end is not None and prev_eq is not None and (eq_end + prev_eq) > 0:
-        values["ROE"] = pnp / ((eq_end + prev_eq) / 2)
+    roe_equity_basis: Optional[str] = None
+
+    basis_key: Optional[str] = None
+    if prev_bs is not None:
+        for key in _EQUITY_BASIS_KEYS:
+            if cur_bs.get(key) is not None and prev_bs.get(key) is not None:
+                basis_key = key
+                break
+
+    eq_cur: Optional[float] = None
+    eq_prev: Optional[float] = None
+    if basis_key is not None:
+        try:
+            eq_cur = float(cur_bs[basis_key])
+            eq_prev = float(prev_bs[basis_key])
+        except (TypeError, ValueError):
+            eq_cur = eq_prev = None
+
+    if pnp is not None and eq_cur is not None and eq_prev is not None and (eq_cur + eq_prev) > 0:
+        values["ROE"] = pnp / ((eq_cur + eq_prev) / 2)
         roe_method = "avg_equity"
+        roe_equity_basis = basis_key
     else:
+        eq_end, end_key = _pick_equity(cur_bs)
         values["ROE"] = _safe_div(pnp, eq_end)
-        roe_method = "ending_equity_fallback" if prev_eq is None else "avg_equity_failed"
+        roe_equity_basis = end_key if values["ROE"] is not None else None
+        # prev_bs 拉不到 / 两年没有一致口径 → ending_equity_fallback;
+        # 口径找到了但分子缺失或权益和 <= 0 → avg_equity_failed
+        roe_method = "ending_equity_fallback" if basis_key is None else "avg_equity_failed"
 
     return {
         "stock_code": symbol,
         "company_name": stmts.get("company_name"),
         "values": values,
         "roe_method": roe_method,
+        "roe_equity_basis": roe_equity_basis,
         "fallbacks": fallbacks if fallbacks else None,
     }
 
@@ -102,6 +151,14 @@ def compare_peers_impl(
 ) -> Dict[str, Any]:
     if not stock_codes:
         raise ValueError("stock_codes is empty")
+    if len(stock_codes) > MAX_STOCK_CODES:
+        logger.warning(
+            f"compare_peers rejected: {len(stock_codes)} stock_codes exceeds limit {MAX_STOCK_CODES}"
+        )
+        raise ValueError(
+            f"too many stock_codes: got {len(stock_codes)}, max {MAX_STOCK_CODES}. "
+            f"Please split into multiple smaller requests."
+        )
 
     metrics = list(metrics) if metrics else list(DEFAULT_METRICS)
 

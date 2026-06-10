@@ -1,7 +1,10 @@
 """三表勾稽 — dict literal 构造,断言每条 check 的 passed/failed/skipped 路径。"""
 from __future__ import annotations
 
+import re
+
 from ashare_mcp.checks import (
+    ALL_CHECKS,
     DEFAULT_TOLERANCE,
     OP_DECOMP_TOLERANCE,
     check_balance_sheet_equation,
@@ -188,3 +191,33 @@ def test_run_all_checks_summary_aggregates_correctly():
         "cce_period_change",
         "operate_profit_decomp",
     ]
+
+
+# ---------- docstring 防漂移 ----------
+
+def test_cross_check_docstring_count_matches_all_checks():
+    """server.cross_check_balance 的 docstring 宣称的勾稽条数必须与 ALL_CHECKS 一致。
+    新增/删除 check 而忘记同步 MCP docstring(LLM 唯一看到的说明书)时此测试报警。"""
+    from ashare_mcp import server
+
+    doc = server.cross_check_balance.__doc__
+    assert doc, "cross_check_balance docstring missing"
+
+    actual_total = run_all_checks(None, None, None)["summary"]["total"]
+    assert actual_total == len(ALL_CHECKS)
+
+    # 1) 文字宣称:"当前包含 N 条勾稽"
+    m = re.search(r"当前包含\s*(\d+)\s*条勾稽", doc)
+    assert m, "docstring 缺少 '当前包含 N 条勾稽' 宣称"
+    assert int(m.group(1)) == actual_total, (
+        f"docstring 宣称 {m.group(1)} 条,实际 ALL_CHECKS {actual_total} 条 — 请同步 docstring"
+    )
+
+    # 2) summary 示例:'"total": N'
+    m2 = re.search(r'"total":\s*(\d+)', doc)
+    assert m2, "docstring 缺少 summary total 示例"
+    assert int(m2.group(1)) == actual_total
+
+    # 3) 编号列表条数与 total 一致(行首 'N. ' 形式)
+    numbered = re.findall(r"^\s+(\d+)\.\s", doc, flags=re.MULTILINE)
+    assert len(numbered) == actual_total
