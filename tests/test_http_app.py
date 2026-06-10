@@ -60,6 +60,26 @@ def test_statements_422_invalid_code(client, monkeypatch):
     assert "error" in body
 
 
+@pytest.mark.parametrize(
+    "evil",
+    [
+        "../etc/passwd",
+        "/etc/passwd",
+        "000001;rm -rf /",
+        "000001';--",
+        "<script>",
+        "X" * 100,
+        "000001 OR 1=1",
+    ],
+)
+def test_statements_422_rejects_injection_attempts(client, evil: str):
+    """validate_ticker 必须在业务层前拦下所有注入 / path-traversal 字符。"""
+    r = client.get("/api/statements", params={"stock_code": evil, "year": 2024})
+    assert r.status_code == 422
+    body = r.json()
+    assert body["code"] == "INVALID_INPUT"
+
+
 def test_statements_422_value_error_from_business(client, monkeypatch):
     def fake(symbol, year):
         raise ValueError("no annual data for 1999")

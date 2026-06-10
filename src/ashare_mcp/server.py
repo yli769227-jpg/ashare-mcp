@@ -12,6 +12,7 @@ from .data_source import get_annual_statements
 from .history import track_company_history_impl
 from .parse_document import parse_document_impl
 from .peer_compare import compare_peers_impl
+from .security import validate_ticker
 from .utils import get_logger, normalize_stock_code
 
 logger = get_logger(__name__)
@@ -46,7 +47,7 @@ def get_three_statements(stock_code: str, year: int) -> dict:
     """
     logger.info(f"tool=get_three_statements stock_code={stock_code!r} year={year}")
     try:
-        symbol = normalize_stock_code(stock_code)
+        symbol = normalize_stock_code(validate_ticker(stock_code))
         logger.info(f"normalized: {stock_code!r} -> {symbol!r}")
         result = get_annual_statements(symbol, year)
         logger.info(
@@ -100,7 +101,7 @@ def cross_check_balance(stock_code: str, year: int) -> dict:
     """
     logger.info(f"tool=cross_check_balance stock_code={stock_code!r} year={year}")
     try:
-        symbol = normalize_stock_code(stock_code)
+        symbol = normalize_stock_code(validate_ticker(stock_code))
         statements = get_annual_statements(symbol, year)
         result = run_all_checks(
             statements["balance_sheet"],

@@ -60,6 +60,38 @@ def test_parse_document_rejects_missing_file():
         parse_document_impl("/tmp/__definitely_not_here__.pdf")
 
 
+def test_parse_document_rejects_path_outside_base(tmp_path: Path, monkeypatch):
+    """启用 ASHARE_MCP_PARSE_BASE 后,base 之外的路径必须被拒。"""
+    base = tmp_path / "sandbox"
+    base.mkdir()
+    outside = tmp_path / "secret.docx"
+    _make_docx(outside, "should never be reached")
+
+    monkeypatch.setenv("ASHARE_MCP_PARSE_BASE", str(base))
+    with pytest.raises(ValueError, match="escapes base"):
+        parse_document_impl(str(outside), output_format="markdown", lang="ch")
+
+
+def test_parse_document_rejects_bad_lang(tmp_path: Path):
+    """lang 必须是 2-12 位小写字母;命令注入字符 / 路径段 必须拒。"""
+    p = tmp_path / "x.docx"
+    _make_docx(p, KEYWORD)
+    # 注:strip 会消掉前后空白,所以测嵌入字符而不是首尾换行
+    for bad_lang in (
+        "../",
+        "ch; rm -rf /",
+        "c\nh",            # 内嵌换行
+        "中文",
+        "",                # 空串
+        "a",               # 不足 2 位
+        "a" * 13,          # 超长
+        "ch1",             # 含数字
+        "c h",             # 含空格
+    ):
+        with pytest.raises(ValueError, match="lang"):
+            parse_document_impl(str(p), output_format="markdown", lang=bad_lang)
+
+
 def test_parse_document_rejects_unsupported_suffix(tmp_path: Path):
     p = tmp_path / "x.txt"
     p.write_text("hello", encoding="utf-8")

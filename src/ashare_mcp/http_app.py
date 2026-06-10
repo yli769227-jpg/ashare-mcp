@@ -17,6 +17,7 @@ from .data_source import get_annual_statements
 from .checks import run_all_checks
 from .history import track_company_history_impl
 from .peer_compare import compare_peers_impl
+from .security import validate_ticker
 from .utils import get_logger, normalize_stock_code
 
 logger = get_logger(__name__)
@@ -94,7 +95,7 @@ def api_statements(
     year: int = Query(..., description="Annual report year, e.g. 2024"),
 ) -> Dict[str, Any]:
     logger.info(f"GET /api/statements stock_code={stock_code!r} year={year}")
-    symbol = normalize_stock_code(stock_code)
+    symbol = normalize_stock_code(validate_ticker(stock_code))
     result = get_annual_statements(symbol, year)
     logger.info(
         f"GET /api/statements -> 200 company={result.get('company_name')!r} "
@@ -111,7 +112,7 @@ def api_cross_check(
     year: int = Query(...),
 ) -> Dict[str, Any]:
     logger.info(f"GET /api/cross-check stock_code={stock_code!r} year={year}")
-    symbol = normalize_stock_code(stock_code)
+    symbol = normalize_stock_code(validate_ticker(stock_code))
     stmts = get_annual_statements(symbol, year)
     checks = run_all_checks(
         stmts["balance_sheet"],

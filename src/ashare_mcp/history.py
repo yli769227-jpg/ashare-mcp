@@ -20,6 +20,7 @@ from .data_source import (
     _filter_row,
     _pick_annual,
 )
+from .security import validate_ticker
 from .utils import get_logger, normalize_stock_code
 
 logger = get_logger(__name__)
@@ -224,7 +225,8 @@ def track_company_history_impl(
         years = MAX_YEARS
 
     metric_keys: List[str] = list(metrics) if metrics else list(DEFAULT_METRICS)
-    symbol = normalize_stock_code(stock_code)
+    # 形态白名单(拦注入字符 / path-traversal) → 再交易所归一化
+    symbol = normalize_stock_code(validate_ticker(stock_code))
 
     logger.info(
         f"track_company_history start: symbol={symbol} years={years} metrics={len(metric_keys)}"
