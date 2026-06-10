@@ -14,7 +14,7 @@ def _make_df(years: List[int], rows: List[Dict[str, float]]) -> pd.DataFrame:
     assert len(years) == len(rows)
     records = []
     for y, row in zip(years, rows):
-        rec = {"REPORT_DATE": f"{y}-12-31 00:00:00", "SECURITY_NAME_AB BR": ""}
+        rec = {"REPORT_DATE": f"{y}-12-31 00:00:00"}
         rec["SECURITY_NAME_ABBR"] = row.pop("_name", "测试公司")
         rec.update(row)
         records.append(rec)

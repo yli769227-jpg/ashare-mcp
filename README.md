@@ -125,7 +125,7 @@ curl 'http://localhost:8000/api/statements?stock_code=000001&year=2024' | jq '.c
 ```bash
 cd web
 npm install
-cp .env.example .env  # 默认 VITE_API_BASE=http://localhost:8000
+cp .env.example .env.local  # 默认 VITE_API_BASE=http://localhost:8000
 npm run dev           # 开发预览 → http://localhost:5173
 npm run build         # 生产构建到 dist/
 ```
@@ -167,6 +167,21 @@ flowchart LR
 - **进程内存缓存**让"同一公司多年份对比"几乎零成本——冷启动一次拉全量,后续年份切换 < 1ms。
 - **日志走 stderr**,不污染 MCP stdio 协议通道。
 
+## 部署
+
+仓库已内置三份部署配置,前后端分开部署:
+
+| 文件 | 平台 | 部署对象 | 关键配置 |
+|---|---|---|---|
+| `railway.json` + `nixpacks.toml` | [Railway](https://railway.app/) | 后端 `ashare-mcp-http` | Nixpacks 构建(Python 3.11),启动 `ashare-mcp-http`,健康检查 `/healthz`,失败重启最多 3 次 |
+| `vercel.json` | [Vercel](https://vercel.com/) | 前端 `web/`(Vite 静态站) | 构建 `cd web && npm run build`,产物 `web/dist`,SPA rewrites 到 `index.html` |
+
+**后端(Railway)**:连接仓库后 Railway 自动读 `nixpacks.toml` 构建(锁 Python 3.11,不装 `[pdf]` extra),`$PORT` 由平台注入(见 `http_app.py`)。健康检查打 `/healthz`。
+
+**前端(Vercel)**:框架识别为 Vite,构建 `web/` 子目录输出到 `web/dist`。部署前在 Vercel 环境变量里设置 `VITE_API_BASE` 指向你的 Railway 后端地址。
+
+> 公开部署提醒:`http_app.py` 的 CORS 默认 `*`,生产应收紧到具体前端域名;`/api/compare-peers` 单请求上限 20 个代码,建议反向代理层再加限流。
+
 ## 路线图
 
 | 版本 | 工具 | 状态 |
@@ -180,13 +195,13 @@ flowchart LR
 | v2 | `parse_document` PDF/DOCX → markdown(MinerU,optional) | ✅ |
 | v2(当前) | FastAPI HTTP wrapper + Web 前端 demo + pytest + CI | ✅ |
 | v3 | 季度数据 + 同比/环比派生指标 | 待定 |
-| v3 | 公开 demo 站(Vercel 前端 + Railway 后端) | 待定 |
+| v3 | 公开 demo 站部署配置(Vercel 前端 + Railway 后端) | ✅(`railway.json` / `nixpacks.toml` / `vercel.json` 已落仓,见「部署」一节)|
 | v3 | MCP 官方 registry 发布 | 待定 |
 
 ## 本地开发
 
 ```bash
-# 装 dev 依赖(包含 pytest / pytest-asyncio / httpx)
+# 装 dev 依赖(包含 pytest / httpx)
 pip install -e ".[dev]"
 
 # 跑测试套件(全部离线,akshare 走 mock,~1.5s)

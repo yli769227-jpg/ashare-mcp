@@ -61,9 +61,36 @@ def _fetch_em(symbol: str, kind: str) -> pd.DataFrame:
     return df
 
 
+# 缓存 TTL:财报数据日内基本不变,但长跑 HTTP 服务进程级 lru_cache 永不过期
+# 会在公司发新报告后仍返回陈旧数据。用「时间桶」把 TTL 折进 lru_cache 的 key:
+# 每过 CACHE_TTL_SECONDS 时间桶递增,旧 key 自然失效、触发重取。
+CACHE_TTL_SECONDS = 6 * 60 * 60  # 6 小时
+
+
 @lru_cache(maxsize=128)
-def _cached(symbol: str, kind: str) -> pd.DataFrame:
+def _cached_ttl(symbol: str, kind: str, time_bucket: int) -> pd.DataFrame:
+    # time_bucket 仅用于让 lru_cache key 随时间滚动失效,不参与抓取逻辑。
     return _fetch_em(symbol, kind)
+
+
+def _cached(symbol: str, kind: str) -> pd.DataFrame:
+    """带 TTL 的进程内缓存包装。同一时间桶内命中缓存,跨桶触发重取。"""
+    time_bucket = int(time.time()) // CACHE_TTL_SECONDS
+    info_before = _cached_ttl.cache_info()
+    df = _cached_ttl(symbol, kind, time_bucket)
+    info_after = _cached_ttl.cache_info()
+    if info_after.hits > info_before.hits:
+        logger.info(f"cache hit: symbol={symbol} kind={kind} bucket={time_bucket}")
+    else:
+        logger.info(
+            f"cache miss/expired -> refetch: symbol={symbol} kind={kind} "
+            f"bucket={time_bucket} ttl={CACHE_TTL_SECONDS}s"
+        )
+    return df
+
+
+# 透出底层 lru_cache 的 cache_clear,供测试 / 手动失效使用(保持旧接口不变)
+_cached.cache_clear = _cached_ttl.cache_clear  # type: ignore[attr-defined]
 
 
 def _to_native(val: Any) -> Any:

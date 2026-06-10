@@ -96,6 +96,26 @@ def test_compare_peers_normal_three_companies():
     assert "ROE" in out["summary"]
 
 
+def test_compare_peers_dedups_duplicate_codes():
+    """输入含重复代码(同代码 + 不同格式)时,结果无重复条目、summary count 正确。"""
+    _FIXTURE[("SZ000001", 2024)] = _fake_statements("平安银行", 5e12, 4e11, 4e11, total_operate_income=1.6e11)
+    _FIXTURE[("SH600036", 2024)] = _fake_statements("招商银行", 1e13, 1.4e12, 9e11, total_operate_income=3.4e11)
+    _FIXTURE[("SZ000001", 2023)] = _fake_statements("平安银行", 5e12, 3e11, 3.5e11, total_operate_income=1.5e11)
+    _FIXTURE[("SH600036", 2023)] = _fake_statements("招商银行", 9e12, 1.3e12, 8e11, total_operate_income=3.3e11)
+
+    # 完全重复 + 同一只股票的不同输入格式(000001 / SZ000001 / 000001.SZ)
+    out = peer_compare.compare_peers_impl(
+        ["000001", "000001", "SZ000001", "000001.SZ", "600036"], 2024
+    )
+
+    codes = [c["stock_code"] for c in out["companies"]]
+    assert codes == ["SZ000001", "SH600036"]  # 去重且保持首现顺序
+    assert len(codes) == len(set(codes))      # 无重复条目
+    assert out["errors"] == []
+    # summary count 不被重复项虚高
+    assert out["summary"]["TOTAL_ASSETS"]["count"] == 2
+
+
 def test_compare_peers_single_company_fails_recorded_in_errors():
     _FIXTURE[("SZ000001", 2024)] = _fake_statements("平安", 1e12, 1e11, 1e11, total_operate_income=1e11)
     _FIXTURE[("SZ000001", 2023)] = _fake_statements("平安", 9e11, 9e10, 9e10, total_operate_income=9e10)

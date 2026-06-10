@@ -69,25 +69,6 @@ def _make_result(
     }
 
 
-def _pick(d: Optional[Dict[str, Any]], *keys: str) -> tuple[Optional[float], list[str]]:
-    """从 dict 里取多个字段;返回 (求和, 缺失字段列表)。任一缺失即累计为缺失,但已存在的部分仍参与求和。"""
-    if d is None:
-        return None, list(keys)
-    total = 0.0
-    missing: list[str] = []
-    found_any = False
-    for k in keys:
-        v = d.get(k)
-        if v is None:
-            missing.append(k)
-        else:
-            total += float(v)
-            found_any = True
-    if not found_any:
-        return None, missing
-    return total, missing
-
-
 def check_balance_sheet_equation(
     bs: Optional[Dict[str, Any]],
     pl: Optional[Dict[str, Any]],

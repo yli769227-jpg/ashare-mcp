@@ -64,8 +64,10 @@ async def _value_error_handler(request: Request, exc: ValueError) -> JSONRespons
 async def _generic_exception_handler(request: Request, exc: Exception) -> JSONResponse:
     # FastAPI's own HTTPException is handled by Starlette before this runs, so
     # anything reaching here is genuinely unexpected (network, akshare crash, etc.)
+    # 详细异常(类型/消息/堆栈)只记服务端日志;对外只回通用信息,
+    # 避免向公网客户端泄露内部异常细节、路径或堆栈。
     logger.exception(f"502 {request.method} {request.url.path} UPSTREAM_ERROR: {type(exc).__name__}: {exc}")
-    return _err(502, f"{type(exc).__name__}: {exc}", "UPSTREAM_ERROR")
+    return _err(502, "上游数据获取失败,请稍后重试", "UPSTREAM_ERROR")
 
 
 # ---------------------------------------------------------------------------

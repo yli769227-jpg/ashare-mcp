@@ -79,7 +79,9 @@ def test_statements_502_upstream_error(client, monkeypatch):
     assert r.status_code == 502
     body = r.json()
     assert body["code"] == "UPSTREAM_ERROR"
-    assert "network down" in body["error"]
+    # 不得向公网客户端泄露内部异常细节(类型/消息/堆栈)
+    assert "network down" not in body["error"]
+    assert "RuntimeError" not in body["error"]
 
 
 def test_statements_missing_required_param(client):

@@ -162,14 +162,36 @@ def compare_peers_impl(
 
     metrics = list(metrics) if metrics else list(DEFAULT_METRICS)
 
-    # 归一化代码,无效代码进 errors,不参与拉取
+    # 入口去重(保持首次出现顺序):重复代码会产生重复条目并让 summary count 虚高。
+    deduped: List[str] = []
+    seen: set[str] = set()
+    for code in stock_codes:
+        if code not in seen:
+            seen.add(code)
+            deduped.append(code)
+    if len(deduped) < len(stock_codes):
+        logger.info(
+            f"compare_peers: deduped stock_codes {len(stock_codes)} -> {len(deduped)}"
+        )
+    stock_codes = deduped
+
+    # 归一化代码,无效代码进 errors,不参与拉取。
+    # 归一化后再次去重:不同输入格式(000001 / SZ000001 / 000001.SZ)指向同一只股票,
+    # 否则会产生重复 company 条目并让 summary count 虚高。
     normalized: List[tuple[str, str]] = []
+    seen_sym: set[str] = set()
     errors: List[Dict[str, Any]] = []
     for code in stock_codes:
         try:
-            normalized.append((code, normalize_stock_code(code)))
+            sym = normalize_stock_code(code)
         except ValueError as e:
             errors.append({"stock_code": code, "error": f"ValueError: {e}"})
+            continue
+        if sym in seen_sym:
+            logger.info(f"compare_peers: skip duplicate normalized symbol {sym} (from {code!r})")
+            continue
+        seen_sym.add(sym)
+        normalized.append((code, sym))
 
     companies: List[Dict[str, Any]] = []
     if normalized:
